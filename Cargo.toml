@@ -3,6 +3,9 @@ name = "gpui-ce-cli"
 version = "0.1.0"
 edition = "2024"
 description = "Development CLI for GPUI-CE applications"
+readme = "README.md"
+keywords = ["gpui", "gui", "hot-reload", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 license = "Apache-2.0"
 repository = "https://github.com/gpui-ce/cli"
 

@@ -1,0 +1,101 @@
+name: Release packages
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      draft_release:
+        description: Create a draft prerelease from Cargo's current version
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Package (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Build and test release binaries
+        run: cargo test --locked --release --target '${{ matrix.target }}'
+      - name: Package and test installed binary
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            python3 scripts/package.py --binary 'target/${{ matrix.target }}/release/gpui' --target '${{ matrix.target }}' --tag "$GITHUB_REF_NAME"
+          else
+            python3 scripts/package.py --binary 'target/${{ matrix.target }}/release/gpui' --target '${{ matrix.target }}'
+          fi
+          mkdir "$RUNNER_TEMP/installed-gpui"
+          tar -xzf dist/*.tar.gz -C "$RUNNER_TEMP/installed-gpui"
+          packaged_binary=$(find "$RUNNER_TEMP/installed-gpui" -type f -name gpui)
+          "$packaged_binary" --version
+          "$packaged_binary" new "$RUNNER_TEMP/packaged-counter"
+          cargo metadata --offline --no-deps --format-version 1 --manifest-path "$RUNNER_TEMP/packaged-counter/Cargo.toml"
+      - name: Package Cargo source
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          cargo package --locked --no-verify
+          cp target/package/gpui-ce-cli-*.crate dist/
+          cd dist
+          sha256sum -- ./*.crate > source.sha256
+      - name: Upload packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpui-package-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  draft:
+    name: Assemble draft release
+    needs: build
+    if: github.ref_type == 'tag' || inputs.draft_release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: gpui-package-*
+          path: dist
+          merge-multiple: true
+      - name: Verify checksums and create draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cd dist
+          cat -- ./*.sha256 > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            release_tag="$GITHUB_REF_NAME"
+          else
+            release_tag=$(python3 -c 'import pathlib, tomllib; print("v" + tomllib.loads(pathlib.Path("../Cargo.toml").read_text())["package"]["version"])')
+          fi
+          gh release create "$release_tag" ./*.tar.gz ./*.crate SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --prerelease \
+            --title "GPUI CLI $release_tag (experimental)" --notes-file ../docs/release-notes.md

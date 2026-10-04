@@ -40,7 +40,14 @@ gpui-ce = { git = "https://github.com/gpui-ce/gpui-ce", features = ["hot-patchin
 Use a revision containing the `hot-patching` feature. GPUI-CE connects to the
 patch server on startup and redraws windows after patches. No extra
 application-side connection is needed. The current protocol requires Subsecond
-0.7.10, matching GPUI-CE main.
+0.7.10, matching GPUI-CE main. On macOS, keep IOSurface's native link feature
+enabled because the driver's baseline retains dependency code that ordinary
+builds may discard. Generated apps include this dependency:
+
+```toml
+[target.'cfg(target_os = "macos")'.dependencies]
+io-surface = { version = "0.16.1", features = ["link"] }
+```
 
 ```sh
 gpui watch
@@ -130,6 +137,36 @@ checks. Separate macOS jobs build the actual generated counter app, open its
 GPUI window, patch rendering twice, and verify that its PID and counter survive.
 These use a checkout of the template's pinned GPUI-CE revision; locally,
 `GPUI_SOURCE=/path/to/gpui-ce` can select an existing checkout. Failed jobs retain runtime logs for diagnosis.
+
+## Release packages
+
+Release archives contain `gpui`, LICENSE, NOTICE, and this README. Extract the
+archive for your platform and put `gpui` on PATH. Rust and GPUI's native
+application dependencies are still needed. The Linux x86_64 binary targets
+Ubuntu 24.04's glibc 2.39 or newer. macOS archives cover Intel and Apple Silicon;
+they are not Developer ID signed or notarized. Linux aarch64 can be built from
+source.
+
+The `Release packages` workflow builds release binaries, runs their tests,
+checks that the extracted binary generates an app, and packages Cargo source.
+A manual run builds downloadable workflow artifacts. Selecting `draft_release`,
+or pushing a tag matching Cargo's version (for example `v0.1.0`), also assembles
+a draft prerelease with SHA256SUMS. Publishing is a separate GitHub release
+step; the workflow never publishes automatically.
+
+Verify downloaded files before installing:
+
+```sh
+sha256sum --check SHA256SUMS # Linux
+shasum -a 256 --check SHA256SUMS # macOS
+```
+
+For a local archive (Python 3.11 or newer):
+
+```sh
+cargo build --locked --release
+python3 scripts/package.py --binary target/release/gpui --target x86_64-unknown-linux-gnu
+```
 
 ## License
 

@@ -16,7 +16,7 @@ save. Render changes should appear while preserving the counter.
 
 Restart watch after changing state layouts or function signatures. Hot patching
 is experimental. Dependencies are pinned to a compatible GPUI-CE revision;
-update both `rev` values together when upgrading, and check that its Subsecond
+update all `rev` values together when upgrading, and check that its Subsecond
 version is supported by your CLI.
 
 The app is a standalone Cargo workspace. To join an existing workspace, remove

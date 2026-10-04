@@ -13,3 +13,7 @@ gpui_ce_platform = { git = "https://github.com/gpui-ce/gpui-ce", rev = "{{gpui_r
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gpui_ce_platform = { git = "https://github.com/gpui-ce/gpui-ce", rev = "{{gpui_rev}}", features = ["wayland", "x11"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Hot-patch builds retain IOSurface bindings that ordinary builds can discard.
+io-surface = { version = "0.16.1", features = ["link"] }
