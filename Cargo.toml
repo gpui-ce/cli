@@ -6,6 +6,7 @@ description = "Development CLI for GPUI-CE applications"
 readme = "README.md"
 keywords = ["gpui", "gui", "hot-reload", "cli"]
 categories = ["command-line-utilities", "development-tools"]
+include = ["src/**", "templates/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "NOTICE"]
 license = "Apache-2.0"
 repository = "https://github.com/gpui-ce/cli"
 

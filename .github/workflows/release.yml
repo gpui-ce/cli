@@ -57,7 +57,7 @@ jobs:
       - name: Package Cargo source
         if: matrix.os == 'ubuntu-24.04'
         run: |
-          cargo package --locked --no-verify
+          cargo package --locked
           cp target/package/gpui-ce-cli-*.crate dist/
           cd dist
           sha256sum -- ./*.crate > source.sha256
@@ -96,6 +96,13 @@ jobs:
           else
             release_tag=$(python3 -c 'import pathlib, tomllib; print("v" + tomllib.loads(pathlib.Path("../Cargo.toml").read_text())["package"]["version"])')
           fi
-          gh release create "$release_tag" ./*.tar.gz ./*.crate SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --prerelease \
-            --title "GPUI CLI $release_tag (experimental)" --notes-file ../docs/release-notes.md
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json isDraft > "$RUNNER_TEMP/release-state.json"; then
+            python3 -c 'import json, sys; sys.exit(0 if json.load(open(sys.argv[1]))["isDraft"] else "Refusing to replace a published release")' "$RUNNER_TEMP/release-state.json"
+            gh release upload "$release_tag" ./*.tar.gz ./*.crate SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$release_tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --prerelease \
+              --title "GPUI CLI $release_tag (experimental)" --notes-file ../docs/release-notes.md
+          else
+            gh release create "$release_tag" ./*.tar.gz ./*.crate SHA256SUMS \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --prerelease \
+              --title "GPUI CLI $release_tag (experimental)" --notes-file ../docs/release-notes.md
+          fi

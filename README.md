@@ -149,6 +149,8 @@ source.
 
 The `Release packages` workflow builds release binaries, runs their tests,
 checks that the extracted binary generates an app, and packages Cargo source.
+The installable `.crate` includes the CLI and templates; regression fixtures
+and packaging scripts are available in the repository checkout.
 A manual run builds downloadable workflow artifacts. Selecting `draft_release`,
 or pushing a tag matching Cargo's version (for example `v0.1.0`), also assembles
 a draft prerelease with SHA256SUMS. Publishing is a separate GitHub release
