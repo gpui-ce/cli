@@ -1,11 +1,10 @@
-use clap::{Parser, Subcommand};
-use std::{
-    ffi::OsString,
-    path::PathBuf,
-    process::{Command, ExitCode},
-};
+mod compiler;
+mod native;
+mod server;
+mod watch;
 
-const DX_VERSION: &str = "0.7.10";
+use clap::{Parser, Subcommand};
+use std::{ffi::OsString, path::PathBuf, process::ExitCode};
 
 #[derive(Parser)]
 #[command(name = "gpui", version, about = "Develop GPUI-CE applications")]
@@ -20,9 +19,9 @@ enum Commands {
     Watch(Watch),
 }
 
-#[derive(clap::Args)]
-struct Watch {
-    /// Cargo manifest for the application (defaults to the current directory)
+#[derive(clap::Args, Debug)]
+pub struct Watch {
+    /// Cargo manifest for the application (defaults to Cargo's current project)
     #[arg(long, value_name = "PATH")]
     manifest_path: Option<PathBuf>,
     /// Package to run in a workspace
@@ -35,118 +34,88 @@ struct Watch {
     #[arg(long)]
     example: Option<String>,
     /// Features to enable (comma or space separated; may be repeated)
-    #[arg(short = 'F', long, action = clap::ArgAction::Append)]
+    #[arg(short = 'F', long)]
     features: Vec<String>,
     #[arg(long)]
     all_features: bool,
     #[arg(long)]
     no_default_features: bool,
-    /// Require Cargo.lock to remain unchanged
     #[arg(long)]
     locked: bool,
-    /// Avoid network access during the build
     #[arg(long)]
     offline: bool,
-    /// Application arguments, using the backend's argument-string syntax
-    #[arg(long, allow_hyphen_values = true)]
+    /// Application arguments as a shell-style string
+    #[arg(long, allow_hyphen_values = true, conflicts_with = "application_args")]
     args: Option<String>,
-    /// Dioxus CLI executable providing the Subsecond compiler
-    #[arg(long, env = "GPUI_DX", default_value = "dx", value_name = "PATH")]
-    dx: PathBuf,
-}
-
-impl Watch {
-    fn command(&self) -> Result<Command, String> {
-        // Resolve before changing directories so relative backend paths retain their meaning.
-        let dx = if self.dx.components().count() > 1 && self.dx.is_relative() {
-            std::env::current_dir()
-                .map_err(|e| e.to_string())?
-                .join(&self.dx)
-        } else {
-            self.dx.clone()
-        };
-        let mut command = Command::new(dx);
-        command.args(["serve", "--hot-patch", "--watch=true", "--open=false"]);
-        if let Some(manifest) = &self.manifest_path {
-            let manifest = manifest
-                .canonicalize()
-                .map_err(|e| format!("cannot open manifest {}: {e}", manifest.display()))?;
-            if !manifest.is_file() || manifest.file_name().is_none_or(|name| name != "Cargo.toml") {
-                return Err("--manifest-path must point to a Cargo.toml file".into());
-            }
-            command.current_dir(manifest.parent().unwrap());
-        }
-        for (flag, value) in [
-            ("--package", &self.package),
-            ("--bin", &self.bin),
-            ("--example", &self.example),
-            ("--args", &self.args),
-        ] {
-            if let Some(value) = value {
-                command.arg(flag).arg(value);
-            }
-        }
-        if !self.features.is_empty() {
-            command.arg("--features").arg(self.features.join(" "));
-        }
-        if self.all_features {
-            command.arg("--all-features");
-        }
-        if self.no_default_features {
-            command.arg("--no-default-features");
-        }
-        let mut cargo_args = Vec::new();
-        if self.locked {
-            cargo_args.push("--locked");
-        }
-        if self.offline {
-            cargo_args.push("--offline");
-        }
-        if !cargo_args.is_empty() {
-            command.arg(format!("--cargo-args={}", cargo_args.join(" ")));
-        }
-        Ok(command)
-    }
-
-    fn run(&self) -> Result<ExitCode, String> {
-        let mut command = self.command()?;
-        let program: OsString = command.get_program().into();
-        let version = Command::new(&program).arg("--version").output().map_err(|e| {
-            format!("cannot run {}: {e}\nInstall the Subsecond backend with: cargo install dioxus-cli --version {DX_VERSION} --locked", self.dx.display())
-        })?;
-        let version_text = String::from_utf8_lossy(&version.stdout);
-        if !version.status.success() || !version_text.split_whitespace().any(|v| v == DX_VERSION) {
-            return Err(format!(
-                "gpui watch requires dioxus-cli {DX_VERSION} to match GPUI-CE's runtime; {} reported {:?}",
-                self.dx.display(),
-                version_text.trim()
-            ));
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            // Replace gpui with the driver, preserving terminal I/O, signals, and exit status.
-            Err(format!("cannot start Subsecond driver: {}", command.exec()))
-        }
-        #[cfg(not(unix))]
-        {
-            let status = command
-                .status()
-                .map_err(|e| format!("cannot start Subsecond driver: {e}"))?;
-            Ok(ExitCode::from(status.code().unwrap_or(1) as u8))
-        }
-    }
+    /// C compiler driver used for linking (defaults to Cargo's linker or cc)
+    #[arg(long)]
+    linker: Option<PathBuf>,
+    /// Local patch-server port (defaults to an available port)
+    #[arg(long, default_value_t = 0)]
+    port: u16,
+    /// Wait for source writes to settle before rebuilding
+    #[arg(long, default_value_t = 200, value_parser = clap::value_parser!(u64).range(1..))]
+    debounce_ms: u64,
+    /// Arguments passed directly to the application after --
+    #[arg(last = true)]
+    application_args: Vec<OsString>,
 }
 
 fn main() -> ExitCode {
-    let result = match Cli::parse().command {
-        Commands::Watch(watch) => watch.run(),
-    };
-    match result {
-        Ok(code) => code,
+    let args: Vec<OsString> = std::env::args_os().collect();
+    if args
+        .get(1)
+        .is_some_and(|arg| arg == "__rustc" || arg == "__link")
+    {
+        return match compiler::internal(&args[1], &args[2..]) {
+            Ok(code) => ExitCode::from(code),
+            Err(error) => {
+                eprintln!("gpui compiler: {error:#}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    let cli = Cli::parse();
+    match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime.block_on(run(cli)),
         Err(error) => {
             eprintln!("error: {error}");
             ExitCode::FAILURE
         }
     }
+}
+
+async fn run(cli: Cli) -> ExitCode {
+    let Cli {
+        command: Commands::Watch(options),
+    } = cli;
+    let result = tokio::select! {
+        result = watch::run(options) => result,
+        result = shutdown() => result,
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn shutdown() -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result?,
+            _ = terminate.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c().await?;
+    Ok(())
 }

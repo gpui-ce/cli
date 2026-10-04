@@ -1,0 +1,9 @@
+GPUI-CE CLI
+
+Parts of src/native.rs and the native linking algorithms in src/compiler.rs
+are adapted from Dioxus CLI by Jonathan Kelley and the Dioxus contributors:
+https://github.com/DioxusLabs/dioxus/tree/57d6794/packages/cli/src/build
+
+Upstream is licensed under MIT OR Apache-2.0. These adaptations use the
+Apache-2.0 option. See LICENSE. The adaptations remove web/mobile platform
+support and integrate the native engine with GPUI's own development driver.
