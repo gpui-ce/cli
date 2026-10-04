@@ -1,6 +1,7 @@
 mod compiler;
 mod native;
 mod platform;
+mod scaffold;
 mod server;
 mod watch;
 
@@ -16,6 +17,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Create a GPUI-CE counter app with hot-patching enabled
+    New(scaffold::New),
     /// Build, run, and hot-patch a native debug application using Subsecond
     Watch(Watch),
 }
@@ -90,12 +93,12 @@ fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> ExitCode {
-    let Cli {
-        command: Commands::Watch(options),
-    } = cli;
-    let result = tokio::select! {
-        result = watch::run(options) => result,
-        result = shutdown() => result,
+    let result = match cli.command {
+        Commands::New(options) => scaffold::run(options),
+        Commands::Watch(options) => tokio::select! {
+            result = watch::run(options) => result,
+            result = shutdown() => result,
+        },
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

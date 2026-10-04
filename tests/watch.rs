@@ -1,11 +1,9 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
-use std::{
-    fs,
-    path::PathBuf,
-    process::{Child, Command},
-    time::{Duration, Instant},
-};
+mod support;
+use support::{Driver, process_exists};
+
+use std::{fs, process::Command};
 
 #[test]
 fn rejects_dx_and_conflicting_targets() {
@@ -31,46 +29,6 @@ fn rejects_internal_compiler_commands_outside_watch() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("requires a watch session"));
-}
-
-fn process_exists(pid: u32) -> bool {
-    if unsafe { libc::kill(pid as i32, 0) } == 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-}
-
-struct Driver {
-    child: Child,
-    dir: PathBuf,
-}
-impl Drop for Driver {
-    fn drop(&mut self) {
-        unsafe {
-            libc::kill(self.child.id() as i32, libc::SIGINT);
-        }
-        let _ = self.child.wait();
-        // Keep failed-test logs and source available for diagnosis.
-    }
-}
-impl Driver {
-    fn log(&self) -> String {
-        fs::read_to_string(self.dir.join("watch.log")).unwrap()
-    }
-    fn wait_for(&mut self, marker: &str) {
-        let deadline = Instant::now() + Duration::from_secs(180);
-        while Instant::now() < deadline {
-            let log = self.log();
-            if log.contains(marker) {
-                return;
-            }
-            if let Some(status) = self.child.try_wait().unwrap() {
-                panic!("driver exited {status}:\n{log}");
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        panic!("waiting for {marker:?}:\n{}", self.log());
-    }
 }
 
 #[test]

@@ -15,7 +15,23 @@ validated with a GPUI-CE application on Wayland.
 cargo install --path . --locked
 ```
 
-Enable runtime integration on your application's GPUI-CE dependency:
+Create a standalone counter app with hot-patching enabled:
+
+```sh
+gpui new my-app
+cd my-app
+gpui watch
+```
+
+`gpui new PATH --name package-name` supports a different directory and package
+name. It refuses to overwrite existing directories. The app includes its source,
+Cargo manifest, README, Apache-2.0 license, and `.gitignore`. Both GPUI dependencies
+are pinned to a compatible revision of main. macOS applications require full
+Xcode with the Metal compiler, in addition to the CLI's Command Line Tools.
+See [GPUI-CE's setup guide](https://github.com/gpui-ce/gpui-ce/blob/main/SETUP.md)
+for platform dependencies.
+
+For an existing application, enable runtime integration on your application's GPUI-CE dependency:
 
 ```toml
 gpui-ce = { git = "https://github.com/gpui-ce/gpui-ce", features = ["hot-patching"] }
@@ -92,6 +108,8 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo fetch --locked --manifest-path tests/fixtures/hot-patch/Cargo.toml
 cargo test --locked --test watch -- --ignored --nocapture
+# Requires a working display and GPUI native dependencies:
+cargo test --locked --test gpui_window -- --ignored --nocapture
 ```
 
 The explicit ignored test builds a real Subsecond application and opens a local
@@ -108,7 +126,10 @@ GitHub Actions runs formatting, Clippy, unit tests, and the real hot-patch/resta
 regression on Ubuntu, Apple Silicon macOS (`macos-15`), and Intel macOS
 (`macos-15-intel`). The macOS fixture also calls CoreFoundation to exercise
 framework linking. Both dependency graphs are locked and fetched before offline
-checks. Failed jobs retain runtime logs for diagnosis.
+checks. Separate macOS jobs build the actual generated counter app, open its
+GPUI window, patch rendering twice, and verify that its PID and counter survive.
+These use a checkout of the template's pinned GPUI-CE revision; locally,
+`GPUI_SOURCE=/path/to/gpui-ce` can select an existing checkout. Failed jobs retain runtime logs for diagnosis.
 
 ## License
 

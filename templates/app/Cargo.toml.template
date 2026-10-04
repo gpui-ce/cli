@@ -1,0 +1,15 @@
+[package]
+name = "{{name}}"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+
+[workspace]
+
+[dependencies]
+gpui = { package = "gpui-ce", git = "https://github.com/gpui-ce/gpui-ce", rev = "{{gpui_rev}}", default-features = false, features = ["hot-patching"] }
+gpui_ce_platform = { git = "https://github.com/gpui-ce/gpui-ce", rev = "{{gpui_rev}}" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_ce_platform = { git = "https://github.com/gpui-ce/gpui-ce", rev = "{{gpui_rev}}", features = ["wayland", "x11"] }

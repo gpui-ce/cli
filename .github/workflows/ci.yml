@@ -57,3 +57,45 @@ jobs:
             ${{ runner.temp }}/gpui-native-e2e-*/watch.log
           if-no-files-found: ignore
           retention-days: 7
+
+  gpui-window:
+    name: GPUI window (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the template's GPUI-CE revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: gpui-ce/gpui-ce
+          ref: 96a5ecca405b288a0107eaa1c057d954db6a41be
+          path: .gpui-smoke-deps
+      - name: Install Rust and inspect Xcode
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          xcodebuild -version
+          xcrun --find metal
+      - name: Test generated GPUI window and render patches
+        env:
+          TMPDIR: ${{ runner.temp }}
+          GPUI_SOURCE: ${{ github.workspace }}/.gpui-smoke-deps
+        shell: bash
+        run: cargo test --locked --test gpui_window -- --ignored --nocapture 2>&1 | tee "$RUNNER_TEMP/gpui-window-test.log"
+      - name: Upload GPUI diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpui-window-diagnostics-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/gpui-window-test.log
+            ${{ runner.temp }}/gpui-window-e2e-*/watch.log
+          if-no-files-found: ignore
+          retention-days: 7
