@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Native (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, macos-15-intel]
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      TMPDIR: ${{ runner.temp }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+          rustc -vV
+      - name: Fetch locked dependencies
+        run: |
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path tests/fixtures/hot-patch/Cargo.toml
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --offline --locked --all-targets -- -D warnings
+      - name: Unit and argument tests
+        run: cargo test --offline --locked
+      - name: Native hot-patch and restart regression
+        shell: bash
+        run: cargo test --offline --locked --test watch -- --ignored --nocapture 2>&1 | tee "$RUNNER_TEMP/native-test.log"
+      - name: Upload runtime diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-diagnostics-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/native-test.log
+            ${{ runner.temp }}/gpui-native-e2e-*/watch.log
+          if-no-files-found: ignore
+          retention-days: 7

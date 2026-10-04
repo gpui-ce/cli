@@ -104,6 +104,12 @@ GPUI-CE main at `96a5ecca405b288a0107eaa1c057d954db6a41be` on Linux x86_64 with
 Wayland. Render patches preserved the PID, startup timestamp, and render counter.
 That manual test requires a working display and GPUI's native dependencies.
 
+GitHub Actions runs formatting, Clippy, unit tests, and the real hot-patch/restart
+regression on Ubuntu, Apple Silicon macOS (`macos-15`), and Intel macOS
+(`macos-15-intel`). The macOS fixture also calls CoreFoundation to exercise
+framework linking. Both dependency graphs are locked and fetched before offline
+checks. Failed jobs retain runtime logs for diagnosis.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
