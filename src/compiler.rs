@@ -1,7 +1,8 @@
 //! Cargo/rustc capture and native linking. Fat archive and thin-link argument
 //! handling adapted from Dioxus CLI build/link.rs at 57d6794 (Apache-2.0).
-//! Modified to run entirely inside gpui and support Linux ELF only. See NOTICE.
+//! Modified to run entirely inside gpui and support ELF and Mach-O. See NOTICE.
 
+use crate::platform::Platform;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -79,7 +80,7 @@ pub fn internal(mode: &OsStr, args: &[OsString]) -> Result<u8> {
     let target =
         PathBuf::from(std::env::var_os("GPUI_TARGET_DIR").context("missing target directory")?);
     let archive = session.join("dependencies.a");
-    let args = fat_link_args(&args, &target, &archive)?;
+    let args = fat_link_args(&args, &target, &archive, Platform::host()?)?;
     let status = Command::new(linker).args(args).status()?;
     Ok(status.code().unwrap_or(1) as u8)
 }
@@ -117,7 +118,12 @@ pub fn value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
         .map(|a| a[1].as_str())
 }
 
-pub fn fat_link_args(args: &[String], target: &Path, archive: &Path) -> Result<Vec<String>> {
+pub fn fat_link_args(
+    args: &[String],
+    target: &Path,
+    archive: &Path,
+    platform: Platform,
+) -> Result<Vec<String>> {
     let mut builder = ar::Builder::new(fs::File::create(archive)?);
     let mut retained = std::collections::HashSet::new();
     let mut has_objects = false;
@@ -147,42 +153,71 @@ pub fn fat_link_args(args: &[String], target: &Path, archive: &Path) -> Result<V
     for arg in args {
         if arg.ends_with(".rlib") {
             if !inserted && has_objects {
-                output.extend([
-                    "-Wl,--whole-archive".into(),
-                    archive.display().to_string(),
-                    "-Wl,--no-whole-archive".into(),
-                ]);
+                match platform {
+                    Platform::Linux => output.extend([
+                        "-Wl,--whole-archive".into(),
+                        archive.display().to_string(),
+                        "-Wl,--no-whole-archive".into(),
+                    ]),
+                    Platform::Macos => {
+                        output.extend(["-Wl,-force_load".into(), archive.display().to_string()])
+                    }
+                }
                 inserted = true;
             }
             if !retained.contains(arg) {
                 continue;
             }
         }
-        if arg == "-Wl,--gc-sections" {
+        if matches!(arg.as_str(), "-Wl,--gc-sections" | "-Wl,-dead_strip") {
             continue;
         }
         output.push(arg.clone());
     }
-    output.push("-Wl,--export-dynamic-symbol,main".into());
+    output.push(
+        match platform {
+            Platform::Linux => "-Wl,--export-dynamic-symbol,main",
+            Platform::Macos => "-Wl,-exported_symbol,_main",
+        }
+        .into(),
+    );
     Ok(output)
 }
 
-pub fn thin_link_args(args: &[String]) -> Vec<String> {
-    let mut out = [
-        "-shared",
-        "-Wl,--eh-frame-hdr",
-        "-Wl,-z,noexecstack",
-        "-Wl,-z,relro,-z,now",
-        "-nodefaultlibs",
-        "-Wl,-Bdynamic",
-        "-Wl,-z,defs",
-    ]
-    .map(str::to_owned)
-    .to_vec();
-    for (i, arg) in args.iter().enumerate() {
-        if arg == "-L" {
+pub fn thin_link_args(args: &[String], platform: Platform) -> Vec<String> {
+    let mut out: Vec<String> = match platform {
+        Platform::Linux => [
+            "-shared",
+            "-Wl,--eh-frame-hdr",
+            "-Wl,-z,noexecstack",
+            "-Wl,-z,relro,-z,now",
+            "-nodefaultlibs",
+            "-Wl,-Bdynamic",
+            "-Wl,-z,defs",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        Platform::Macos => ["-dynamiclib", "-Wl,-undefined,error"]
+            .map(str::to_owned)
+            .to_vec(),
+    };
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "-L"
+            || (platform == Platform::Macos
+                && matches!(
+                    arg.as_str(),
+                    "-F" | "-framework"
+                        | "-weak_framework"
+                        | "-arch"
+                        | "-target"
+                        | "--target"
+                        | "-isysroot"
+                        | "-isystem"
+                ))
+        {
             out.push(arg.clone());
-            if let Some(path) = args.get(i + 1) {
+            if let Some(path) = args.next() {
                 out.push(path.clone());
             }
         } else if arg.starts_with("-l")
@@ -194,6 +229,13 @@ pub fn thin_link_args(args: &[String]) -> Vec<String> {
             || arg.starts_with("-Wl,--target=")
             || arg.starts_with("-Wl,-fuse-ld")
             || arg.ends_with(".so")
+            || (platform == Platform::Macos
+                && (arg.starts_with("-F")
+                    || arg.ends_with(".dylib")
+                    || arg.starts_with("--target=")
+                    || arg.starts_with("-Wl,-syslibroot,")
+                    || arg.starts_with("-Wl,-rpath,")
+                    || arg.starts_with("-Wl,-platform_version,")))
         {
             out.push(arg.clone());
         }
@@ -216,7 +258,7 @@ pub fn scripts(session: &Path) -> Result<()> {
         Ok(())
     }
     #[cfg(not(unix))]
-    anyhow::bail!("native watch currently requires Linux")
+    anyhow::bail!("native watch currently requires Linux or macOS")
 }
 
 /// Each compiler/app has its own process group, so cancelling watch also stops
@@ -305,12 +347,15 @@ pub async fn patch(
     let stub = session.join("stub.o");
     fs::write(&stub, cache.stub(&objects, runtime_main)?)?;
     objects.push(stub);
-    let output = session.join(format!("patch-{sequence}.so"));
+    let output = session.join(format!(
+        "patch-{sequence}.{}",
+        cache.platform.library_extension()
+    ));
     let mut linker = tokio::process::Command::new(link.linker);
     linker
         .current_dir(&cwd)
         .args(&objects)
-        .args(thin_link_args(&link.args))
+        .args(thin_link_args(&link.args, cache.platform))
         .arg("-o")
         .arg(&output);
     run(&mut linker).await.context("link patch")?;
@@ -337,7 +382,7 @@ mod tests {
             "old-app",
         ]
         .map(str::to_owned);
-        let actual = thin_link_args(&args);
+        let actual = thin_link_args(&args, Platform::Linux);
         for required in [
             "-shared",
             "-Wl,-z,defs",
@@ -354,6 +399,60 @@ mod tests {
         for omitted in ["tip.rcgu.o", "deps.rlib", "-pie", "-o", "old-app"] {
             assert!(!actual.contains(&omitted.to_owned()));
         }
+    }
+
+    #[test]
+    fn macho_link_preserves_framework_sdk_and_architecture_arguments() {
+        let args = [
+            "tip.rcgu.o",
+            "deps.rlib",
+            "-framework",
+            "CoreFoundation",
+            "-weak_framework",
+            "Metal",
+            "-arch",
+            "arm64",
+            "-isysroot",
+            "/sdk",
+            "-target",
+            "arm64-apple-macos13",
+            "-L",
+            "/libs",
+            "-F/Frameworks",
+            "-mmacosx-version-min=13.0",
+            "-lSystem",
+            "/libs/native.dylib",
+            "-Wl,-dead_strip",
+            "-Wl,-exported_symbol,_main",
+            "-o",
+            "app",
+        ]
+        .map(str::to_owned);
+        let actual = thin_link_args(&args, Platform::Macos);
+        assert_eq!(
+            actual,
+            [
+                "-dynamiclib",
+                "-Wl,-undefined,error",
+                "-framework",
+                "CoreFoundation",
+                "-weak_framework",
+                "Metal",
+                "-arch",
+                "arm64",
+                "-isysroot",
+                "/sdk",
+                "-target",
+                "arm64-apple-macos13",
+                "-L",
+                "/libs",
+                "-F/Frameworks",
+                "-mmacosx-version-min=13.0",
+                "-lSystem",
+                "/libs/native.dylib"
+            ]
+            .map(str::to_owned)
+        );
     }
 
     #[test]
@@ -384,7 +483,18 @@ mod tests {
             "-o".to_owned(),
             "app".to_owned(),
         ];
-        let output = fat_link_args(&args, &dir, &archive).unwrap();
+        let mac_args: Vec<_> = args
+            .iter()
+            .cloned()
+            .chain(["-Wl,-dead_strip".to_owned()])
+            .collect();
+        let mac_output =
+            fat_link_args(&mac_args, &dir, &dir.join("mac.a"), Platform::Macos).unwrap();
+        assert!(mac_output.contains(&"-Wl,-force_load".to_owned()));
+        assert!(mac_output.contains(&"-Wl,-exported_symbol,_main".to_owned()));
+        assert!(!mac_output.contains(&"-Wl,-dead_strip".to_owned()));
+        assert!(!mac_output.contains(&"-Wl,--whole-archive".to_owned()));
+        let output = fat_link_args(&args, &dir, &archive, Platform::Linux).unwrap();
         assert!(output.contains(&rlib.display().to_string()));
         assert!(output.contains(&"-Wl,--whole-archive".to_owned()));
         assert!(!output.contains(&"-Wl,--gc-sections".to_owned()));

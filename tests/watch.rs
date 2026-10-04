@@ -1,4 +1,4 @@
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::{
     fs,
@@ -31,6 +31,13 @@ fn rejects_internal_compiler_commands_outside_watch() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("requires a watch session"));
+}
+
+fn process_exists(pid: u32) -> bool {
+    if unsafe { libc::kill(pid as i32, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 struct Driver {
@@ -76,6 +83,11 @@ fn patches_without_dx_recovers_from_incomplete_source_and_cleans_up() {
         include_str!("fixtures/hot-patch/Cargo.toml"),
     )
     .unwrap();
+    fs::write(
+        dir.join("Cargo.lock"),
+        include_str!("fixtures/hot-patch/Cargo.lock"),
+    )
+    .unwrap();
     fs::create_dir_all(dir.join("helper/src")).unwrap();
     fs::write(
         dir.join("helper/Cargo.toml"),
@@ -91,7 +103,7 @@ fn patches_without_dx_recovers_from_incomplete_source_and_cleans_up() {
     fs::write(dir.join("src/main.rs"), original).unwrap();
     let log = fs::File::create(dir.join("watch.log")).unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_gpui"))
-        .args(["watch", "--offline", "--manifest-path"])
+        .args(["watch", "--offline", "--locked", "--manifest-path"])
         .arg(dir.join("Cargo.toml"))
         .args(["--", "hello world", "$(literal)"])
         .env(
@@ -176,7 +188,7 @@ fn patches_without_dx_recovers_from_incomplete_source_and_cleans_up() {
     )
     .unwrap();
     driver.wait_for("Rebuild failed:");
-    assert!(PathBuf::from(format!("/proc/{pid}")).exists());
+    assert!(process_exists(pid));
     fs::write(
         &source,
         original.replace("revision=before", "revision=restarted"),
@@ -202,7 +214,7 @@ fn patches_without_dx_recovers_from_incomplete_source_and_cleans_up() {
             .count(),
         2
     );
-    assert!(!PathBuf::from(format!("/proc/{pid}")).exists());
+    assert!(!process_exists(pid));
     fs::write(
         &source,
         original.replace("revision=before", "revision=post_restart"),
@@ -231,12 +243,9 @@ fn patches_without_dx_recovers_from_incomplete_source_and_cleans_up() {
         .parse()
         .unwrap();
     assert_ne!(next_pid, final_pid);
-    assert!(!PathBuf::from(format!("/proc/{next_pid}")).exists());
+    assert!(!process_exists(next_pid));
     drop(driver);
-    assert!(!PathBuf::from(format!("/proc/{final_pid}")).exists());
-    assert!(!PathBuf::from(format!("/proc/{next_pid}")).exists());
-    assert!(
-        !PathBuf::from(format!("/proc/{pid}")).exists(),
-        "application survived driver shutdown"
-    );
+    assert!(!process_exists(final_pid));
+    assert!(!process_exists(next_pid));
+    assert!(!process_exists(pid), "application survived driver shutdown");
 }

@@ -63,10 +63,7 @@ impl Watch {
 
 impl Project {
     async fn resolve(options: &Watch) -> Result<Self> {
-        ensure!(
-            cfg!(target_os = "linux"),
-            "native watch currently supports Linux only"
-        );
+        crate::platform::Platform::host()?;
         let version = Command::new("rustc").arg("-vV").output().await?;
         ensure!(version.status.success(), "cannot query rustc");
         let version = String::from_utf8(version.stdout)?;
@@ -77,7 +74,7 @@ impl Project {
             .to_owned();
         ensure!(
             host.starts_with("x86_64-") || host.starts_with("aarch64-"),
-            "native watch requires x86_64 or aarch64 Linux"
+            "native watch requires x86_64 or aarch64"
         );
         if let Some(manifest) = &options.manifest_path {
             ensure!(

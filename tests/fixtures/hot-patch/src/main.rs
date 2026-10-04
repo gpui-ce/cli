@@ -1,6 +1,14 @@
 use std::{thread, time::Duration};
 
+#[cfg(target_os = "macos")]
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFAbsoluteTimeGetCurrent() -> f64;
+}
+
 fn render(count: u64) {
+    #[cfg(target_os = "macos")]
+    println!("FRAMEWORK time={}", unsafe { CFAbsoluteTimeGetCurrent() });
     println!("helper={}", gpui_native_helper::label());
     println!("revision=before pid={} count={count}", std::process::id());
 }

@@ -1,5 +1,6 @@
 mod compiler;
 mod native;
+mod platform;
 mod server;
 mod watch;
 

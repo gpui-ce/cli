@@ -6,8 +6,10 @@ WebSocket patch server. Installing or invoking the Dioxus CLI (`dx`) is not requ
 
 ## Setup
 
-Requires Rust and a working native GPUI development environment on Linux.
-x86_64 has been tested; aarch64 linking is implemented but unverified.
+Requires Rust and a working native GPUI development environment on Linux or
+macOS. macOS uses the Xcode Command Line Tools (`xcode-select --install`).
+x86_64 and aarch64 native targets are implemented. Linux x86_64 has also been
+validated with a GPUI-CE application on Wayland.
 
 ```sh
 cargo install --path . --locked
@@ -69,10 +71,12 @@ not handled yet.
 
 Hot patching is experimental. Restart watch after changing state layouts,
 function signatures, static initialization, or code outside hot-call boundaries.
-The driver does not detect incompatible layout changes. Linux ELF x86_64 and
-aarch64 are the only implemented targets; cross compilation, macOS, Windows,
-web, and mobile are not supported. Native linker configurations beyond the
-standard GNU-compatible compiler-driver flow may need additional handling.
+The driver does not detect incompatible layout changes. Linux ELF and macOS Mach-O on x86_64 and aarch64 are implemented. macOS
+preserves frameworks, SDK paths, architecture and deployment-target flags and
+loads patches as dylibs. Patches get fresh thread-local storage initialized from
+the baseline; TLS state is not preserved across patches. Cross compilation,
+Windows, web, and mobile are not supported. Custom linker configurations may
+need additional handling.
 
 See [Subsecond's runtime documentation](https://docs.rs/subsecond/0.7.10/subsecond/)
 for hot-call semantics and limitations. The native symbol and linking algorithms
@@ -86,6 +90,7 @@ GPUI-CE still uses Dioxus devtools runtime crates for the wire protocol.
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
+cargo fetch --locked --manifest-path tests/fixtures/hot-patch/Cargo.toml
 cargo test --locked --test watch -- --ignored --nocapture
 ```
 
